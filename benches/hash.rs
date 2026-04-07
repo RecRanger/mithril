@@ -1,5 +1,4 @@
 #![feature(test)]
-#![feature(box_syntax)]
 
 extern crate mithril;
 extern crate test;
