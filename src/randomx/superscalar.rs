@@ -365,6 +365,7 @@ impl ExecutionPort {
 
 #[derive(Debug)]
 pub struct ScMacroOp {
+	#[allow(dead_code)]
 	name: &'static str,
 	size: usize,
 	latency: usize,
