@@ -6,7 +6,6 @@ use super::hash::{fill_aes_1rx4_u64, gen_program_aes_4rx4, hash_aes_1rx4};
 use super::m128::{m128d, m128i};
 use super::memory::{VmMemory, CACHE_LINE_SIZE};
 use super::program::{Instr, Mode, Program, Store, MAX_FLOAT_REG, MAX_REG};
-use std::arch::x86_64::{_mm_getcsr, _mm_setcsr};
 use std::convert::TryInto;
 use std::sync::Arc;
 
@@ -264,17 +263,37 @@ impl Vm {
     }
 
     pub fn reset_rounding_mode(&mut self) {
+        let mxcsr = MXCSR_DEFAULT;
         unsafe {
-            _mm_setcsr(MXCSR_DEFAULT);
+            std::arch::asm!(
+                "ldmxcsr [{0}]",
+                in(reg) &mxcsr,
+                options(nostack)
+            );
         }
     }
 
     pub fn set_rounding_mode(&mut self, mode: u32) {
-        unsafe { _mm_setcsr(MXCSR_DEFAULT | (mode << 13)) }
+        let mxcsr = MXCSR_DEFAULT | (mode << 13);
+        unsafe {
+            std::arch::asm!(
+                "ldmxcsr [{0}]",
+                in(reg) &mxcsr,
+                options(nostack)
+            );
+        }
     }
 
     pub fn get_rounding_mode(&self) -> u32 {
-        unsafe { (_mm_getcsr() >> 13) & 3 }
+        let mut mxcsr: u32 = 0;
+        unsafe {
+            std::arch::asm!(
+                "stmxcsr [{0}]",
+                in(reg) &mut mxcsr,
+                options(nostack)
+            );
+        }
+        (mxcsr >> 13) & 3
     }
 
     //f...
