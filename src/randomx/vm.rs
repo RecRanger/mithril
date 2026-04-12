@@ -321,7 +321,7 @@ impl Vm {
                 );
             }
 
-            let randomx_mode: u32 = match mode {
+            let randomx_mode: u32 = match fpcr {
                 0b00 => 0, // RN - nearest
                 0b10 => 1, // RM - toward minus inf
                 0b01 => 2, // RP - toward plus inf
