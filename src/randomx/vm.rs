@@ -263,37 +263,73 @@ impl Vm {
     }
 
     pub fn reset_rounding_mode(&mut self) {
-        let mxcsr = MXCSR_DEFAULT;
-        unsafe {
-            std::arch::asm!(
-                "ldmxcsr [{0}]",
-                in(reg) &mxcsr,
-                options(nostack)
-            );
-        }
+        // Default rounding mode is 0 (nearest).
+        self.set_rounding_mode(0);
     }
 
     pub fn set_rounding_mode(&mut self, mode: u32) {
-        let mxcsr = MXCSR_DEFAULT | (mode << 13);
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mxcsr = MXCSR_DEFAULT | (mode << 13);
+            unsafe {
+                std::arch::asm!(
+                    "ldmxcsr [{0}]",
+                    in(reg) &mxcsr,
+                    options(nostack)
+                );
+            }
+        }
+
+        #[cfg(target_arch = "aarch64")]
         unsafe {
-            std::arch::asm!(
-                "ldmxcsr [{0}]",
-                in(reg) &mxcsr,
-                options(nostack)
-            );
+            let arm_mode: u64 = match mode {
+                0 => 0b00, // RN - nearest
+                1 => 0b10, // RM - toward minus inf
+                2 => 0b01, // RP - toward plus inf
+                3 => 0b11, // RZ - toward zero
+                _ => unreachable!("Only rounding modes 0 to 3 are valid."),
+            };
+            let mut fpcr: u64;
+            std::arch::asm!("mrs {}, fpcr", out(reg) fpcr);
+            fpcr = (fpcr & !(0b11 << 22)) | (arm_mode << 22);
+            std::arch::asm!("msr fpcr, {}", in(reg) fpcr);
         }
     }
 
     pub fn get_rounding_mode(&self) -> u32 {
-        let mut mxcsr: u32 = 0;
-        unsafe {
-            std::arch::asm!(
-                "stmxcsr [{0}]",
-                in(reg) &mut mxcsr,
-                options(nostack)
-            );
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut mxcsr: u32 = 0;
+            unsafe {
+                std::arch::asm!(
+                    "stmxcsr [{0}]",
+                    in(reg) &mut mxcsr,
+                    options(nostack)
+                );
+            }
+            return (mxcsr >> 13) & 3;
         }
-        (mxcsr >> 13) & 3
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            let fpcr: u64;
+            unsafe {
+                std::arch::asm!(
+                    "mrs {0}, fpcr",
+                    out(reg) fpcr,
+                    options(nostack, nomem)
+                );
+            }
+
+            let randomx_mode: u32 = match mode {
+                0b00 => 0, // RN - nearest
+                0b10 => 1, // RM - toward minus inf
+                0b01 => 2, // RP - toward plus inf
+                0b11 => 3, // RZ - toward zero
+                _ => unreachable!("Only rounding modes 0 to 3 are valid."),
+            };
+            return randomx_mode;
+        }
     }
 
     //f...
