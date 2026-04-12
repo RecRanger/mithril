@@ -1,6 +1,5 @@
 extern crate argon2;
 
-use std::arch::x86_64::{_mm_prefetch, _MM_HINT_NTA};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
@@ -180,16 +179,31 @@ impl VmMemory {
             dataset_memory: RwLock::new(mem),
         }
     }
-
     pub fn dataset_prefetch(&self, offset: u64) {
         let item_num = offset / CACHE_LINE_SIZE;
         if self.cache {
             let mem = self.dataset_memory.read().unwrap();
             let rl_cached = &mem[item_num as usize];
             if let Some(rl) = rl_cached {
+                let raw: *const u8 = rl as *const _ as *const u8;
                 unsafe {
-                    let raw: *const i8 = std::mem::transmute(rl);
-                    _mm_prefetch(raw, _MM_HINT_NTA);
+                    #[cfg(target_arch = "x86_64")]
+                    std::arch::asm!(
+                        "prefetchnta [{ptr}]",
+                        ptr = in(reg) raw,
+                        options(nostack, readonly, preserves_flags)
+                    );
+
+                    #[cfg(target_arch = "aarch64")]
+                    std::arch::asm!(
+                        "prfm pldl1strm, [{ptr}]",
+                        ptr = in(reg) raw,
+                        options(nostack, readonly, preserves_flags)
+                    );
+
+                    // Fallback: no-op on unsupported architectures.
+                    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+                    let _ = raw;
                 }
             }
         }
