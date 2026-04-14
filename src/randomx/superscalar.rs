@@ -365,6 +365,10 @@ impl ExecutionPort {
 
 #[derive(Debug)]
 pub struct ScMacroOp {
+    #[allow(
+        dead_code,
+        reason = "Name field is helpful for debugging and tracing. Nearly no performance impact."
+    )]
     name: &'static str,
     size: usize,
     latency: usize,

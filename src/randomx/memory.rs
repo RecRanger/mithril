@@ -64,7 +64,7 @@ impl SeedMemory {
     }
 }
 
-fn create_argon_context(key: &[u8]) -> argon2::context::Context {
+fn create_argon_context(key: &[u8]) -> argon2::context::Context<'_> {
     let segment_length = RANDOMX_ARGON_MEMORY / (RANDOMX_ARGON_LANES * ARGON2_SYNC_POINTS);
     let config = argon2::config::Config {
         ad: &[],
