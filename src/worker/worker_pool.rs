@@ -192,8 +192,8 @@ fn work_job<'a>(
         // Write nonce directly into blob_bytes at the fixed byte offset (bytes 39–42).
         write_nonce_into_blob(&mut blob_bytes, nonce);
 
-        let hash_result = vm.calculate_hash(&blob_bytes).to_hex();
-        let hash_val = hash_target_value(&hash_result);
+        let hash_result = vm.calculate_hash(&blob_bytes);
+        let hash_val = hash_to_target_comparable_value(hash_result.as_array());
 
         if hash_val < num_target {
             // Only allocate the nonce hex string on the (rare) share-found path.
@@ -202,10 +202,13 @@ fn work_job<'a>(
                 miner_id: job.miner_id.clone(),
                 job_id: job.job_id.clone(),
                 nonce: nonce_hex.clone(),
-                hash: hash_result.to_string(),
+                hash: hash_result.to_hex().to_string(),
             };
 
-            info!("Share found in thread {thread_id}: nonce={nonce_hex}, hash={hash_result}");
+            info!(
+                "Share found in thread {thread_id}: nonce={nonce_hex}, hash={}",
+                hash_result.to_hex().to_string()
+            );
 
             let submit_result = stratum::submit_share(share_tx, share);
             if submit_result.is_err() {
@@ -250,7 +253,7 @@ fn work_job<'a>(
             }
         }
 
-        nonce = job.nonce.fetch_add(1, Ordering::SeqCst);
+        nonce = job.nonce.fetch_add(1, Ordering::SeqCst); // TODO: Assign separate nonce range per thread to avoid atomic stalls.
     }
     WorkerExit::NonceSpaceExhausted
 }
@@ -278,8 +281,10 @@ pub fn job_target_value(hex_str: &str) -> u64 {
     u64::max_value() / (u64::from(u32::max_value()) / u64::from(t))
 }
 
-pub fn hash_target_value(hex_str: &str) -> u64 {
-    byte_string::hex2_u64_le(&hex_str[48..])
+/// Convert the hash value to a value that can be compared with the target value.
+#[inline(always)]
+pub fn hash_to_target_comparable_value(hash_val: &[u8]) -> u64 {
+    u64::from_le_bytes(hash_val[24..32].try_into().unwrap())
 }
 
 #[cfg(test)]
@@ -301,9 +306,14 @@ mod tests {
     }
 
     #[test]
-    fn test_hash_target_value() {
+    fn test_hash_to_target_comparable_value() {
+        let input_hex = "c5c49db95a9da3f0802a34c6f97c364e7455fca7e41f72254fd4624dd2f91578";
+        let input_bytes: [u8; 32] = byte_string::string_to_u8_array(input_hex)
+            .try_into()
+            .unwrap();
+
         assert_eq!(
-            hash_target_value("c5c49db95a9da3f0802a34c6f97c364e7455fca7e41f72254fd4624dd2f91578"),
+            hash_to_target_comparable_value(&input_bytes),
             0x7815f9d24d62d44f
         );
     }
