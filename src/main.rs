@@ -8,7 +8,6 @@ extern crate mithril;
 
 use self::crossbeam_channel::{select, unbounded, Receiver};
 use mithril::bandit_tools;
-use mithril::metric;
 use mithril::mithril_config;
 use mithril::randomx::memory::VmMemoryAllocator;
 use mithril::stratum::{StratumAction, StratumClient};
@@ -96,13 +95,8 @@ fn main() {
             .expect("metrics thread");
 
         // Start worker pool.
-        let mut pool = worker_pool::start(
-            num_threads,
-            &share_sndr,
-            config.metric_conf.resolution,
-            &metric_sndr,
-            vm_memory_allocator,
-        );
+        let mut pool =
+            worker_pool::start(num_threads, &share_sndr, &metric_sndr, vm_memory_allocator);
 
         let term_result =
             start_main_event_loop(&mut pool, &client_err_rcvr, &stratum_rcvr, &timer_rcvr);

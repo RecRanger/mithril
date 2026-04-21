@@ -49,7 +49,7 @@ enum WorkerExit {
 pub fn start(
     num_threads: u64,
     share_sndr: &Sender<stratum::StratumCmd>,
-    metric_resolution: u64,
+
     metric_sndr: &Sender<u64>,
     vm_memory_allocator: VmMemoryAllocator,
 ) -> WorkerPool {
@@ -62,14 +62,7 @@ pub fn start(
 
         let hnd = thread::Builder::new()
             .name(format!("worker thread {}", i))
-            .spawn(move || {
-                work(
-                    &rcvr,
-                    &share_sndr_thread,
-                    metric_resolution,
-                    &metric_sndr_thread,
-                )
-            })
+            .spawn(move || work(&rcvr, &share_sndr_thread, &metric_sndr_thread))
             .expect("worker thread handle");
         thread_chan.push(sndr);
         thread_hnd.push(hnd);
@@ -132,7 +125,7 @@ impl WorkerPool {
 fn work(
     rcv: &Receiver<WorkerCmd>,
     share_tx: &Sender<stratum::StratumCmd>,
-    metric_resolution: u64,
+
     metric_tx: &Sender<u64>,
 ) {
     let first_job = rcv.recv();
@@ -149,7 +142,7 @@ fn work(
     };
 
     loop {
-        let exit_reason = work_job(&job, rcv, share_tx, metric_resolution, metric_tx);
+        let exit_reason = work_job(&job, rcv, share_tx, metric_tx);
         //if work_job returns the nonce space was exhausted or a new job was received.
         //In case the nonce space was exhausted, we have to wait blocking for a new job and "idle".
         match exit_reason {
@@ -179,7 +172,7 @@ fn work_job<'a>(
     job: &'a JobData,
     rcv: &'a Receiver<WorkerCmd>,
     share_tx: &Sender<stratum::StratumCmd>,
-    metric_resolution: u64,
+
     metric_tx: &Sender<u64>,
 ) -> WorkerExit {
     let num_target = job_target_value(&job.target);
@@ -211,7 +204,7 @@ fn work_job<'a>(
         }
 
         hash_count += 1;
-        if hash_count % metric_resolution == 0 {
+        if hash_count % 100 == 0 {
             let send_result = metric_tx.send(hash_count);
             if send_result.is_err() {
                 error!("metric submit failed {:?}", send_result);
