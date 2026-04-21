@@ -89,15 +89,16 @@ impl MetricsAggregator {
 /// log columns stay stable while windows are still filling.
 pub fn fmt_rate(rate: Option<f64>) -> String {
     match rate {
-        None => "           ".to_string(), // blank — window not yet full
+        None => "     --     ".to_string(), // Blank if window not yet full.
         Some(h) if h >= 1_000_000.0 => format!("{:>7.2} MH/s", h / 1_000_000.0),
         Some(h) if h >= 1_000.0 => format!("{:>7.2} KH/s", h / 1_000.0),
         Some(h) => format!("{:>7.2}  H/s", h),
     }
 }
 
-/// Run this on a dedicated thread.  `stop` is flipped by `main` when the
-/// pool is torn down — the thread exits cleanly instead of leaking.
+/// Monitor and report hashrate metrics.
+///
+/// Run this on a dedicated thread.
 pub fn run_metrics_loop(mut agg: MetricsAggregator, rx: &Receiver<u64>, stop: &AtomicBool) {
     let poll_interval = Duration::from_secs(5);
 
@@ -110,11 +111,18 @@ pub fn run_metrics_loop(mut agg: MetricsAggregator, rx: &Receiver<u64>, stop: &A
             return;
         }
 
+        debug!(
+            "total_hashes: {}, total_samples: {}, total_elapsed: {:?}",
+            agg.total_hashes.load(Ordering::Relaxed),
+            agg.samples.len(),
+            agg.first_sample_at.and_then(|t| Some(t.elapsed()))
+        );
+
         let (r15s, r60s, r15m) = agg.update(rx);
 
         if r15s.is_some() || r60s.is_some() || r15m.is_some() {
-            info!(
-                "hashrate  15s: {}  60s: {}  15m: {}",
+            println!(
+                "Hashrate - 15s: {} | 60s: {} | 15m: {}",
                 fmt_rate(r15s),
                 fmt_rate(r60s),
                 fmt_rate(r15m),

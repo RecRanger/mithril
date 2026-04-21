@@ -3,6 +3,7 @@ extern crate crossbeam_channel;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use self::crossbeam_channel::{unbounded, Receiver, Sender};
 use super::super::byte_string;
@@ -55,14 +56,14 @@ pub fn start(
 ) -> WorkerPool {
     let mut thread_chan: Vec<Sender<WorkerCmd>> = Vec::with_capacity(num_threads as usize);
     let mut thread_hnd: Vec<thread::JoinHandle<()>> = Vec::with_capacity(num_threads as usize);
-    for i in 0..num_threads {
+    for thread_id in 0..num_threads {
         let (sndr, rcvr) = unbounded();
         let share_sndr_thread = share_sndr.clone();
         let metric_sndr_thread = metric_sndr.clone();
 
         let hnd = thread::Builder::new()
-            .name(format!("worker thread {}", i))
-            .spawn(move || work(&rcvr, &share_sndr_thread, &metric_sndr_thread))
+            .name(format!("worker thread {}", thread_id))
+            .spawn(move || work(&rcvr, &share_sndr_thread, &metric_sndr_thread, thread_id))
             .expect("worker thread handle");
         thread_chan.push(sndr);
         thread_hnd.push(hnd);
@@ -125,8 +126,8 @@ impl WorkerPool {
 fn work(
     rcv: &Receiver<WorkerCmd>,
     share_tx: &Sender<stratum::StratumCmd>,
-
     metric_tx: &Sender<u64>,
+    thread_id: u64,
 ) {
     let first_job = rcv.recv();
     if first_job.is_err() {
@@ -142,7 +143,7 @@ fn work(
     };
 
     loop {
-        let exit_reason = work_job(&job, rcv, share_tx, metric_tx);
+        let exit_reason = work_job(&job, rcv, share_tx, metric_tx, thread_id);
         //if work_job returns the nonce space was exhausted or a new job was received.
         //In case the nonce space was exhausted, we have to wait blocking for a new job and "idle".
         match exit_reason {
@@ -165,20 +166,23 @@ fn work(
         }
     }
 
-    info!("Worker stopped")
+    info!("Worker stopped (thread {thread_id}");
 }
 
 fn work_job<'a>(
     job: &'a JobData,
     rcv: &'a Receiver<WorkerCmd>,
     share_tx: &Sender<stratum::StratumCmd>,
-
     metric_tx: &Sender<u64>,
+    thread_id: u64,
 ) -> WorkerExit {
     let num_target = job_target_value(&job.target);
     let mut nonce = job.nonce.fetch_add(1, Ordering::SeqCst);
 
-    let mut hash_count: u64 = 0;
+    let mut local_hash_count: u64 = 0;
+    let mut last_hash_report: Instant = Instant::now();
+    let hash_report_interval: Duration = Duration::from_secs_f64(0.5);
+
     let mut vm = new_vm(job.memory.clone());
 
     while nonce <= 65535 {
@@ -193,9 +197,11 @@ fn work_job<'a>(
             let share = stratum_data::Share {
                 miner_id: job.miner_id.clone(),
                 job_id: job.job_id.clone(),
-                nonce: nonce_hex,
+                nonce: nonce_hex.clone(),
                 hash: hash_result.to_string(),
             };
+
+            debug!("Share found in thread {thread_id}: nonce={nonce_hex}, hash={hash_result}");
 
             let submit_result = stratum::submit_share(share_tx, share);
             if submit_result.is_err() {
@@ -203,20 +209,28 @@ fn work_job<'a>(
             }
         }
 
-        hash_count += 1;
-        if hash_count % 100 == 0 {
-            let send_result = metric_tx.send(hash_count);
+        local_hash_count += 1;
+        if local_hash_count > 15 || last_hash_report.elapsed() > hash_report_interval {
+            let send_result = metric_tx.send(local_hash_count);
             if send_result.is_err() {
                 error!("metric submit failed {:?}", send_result);
             }
-            hash_count = 0;
+
+            debug!(
+                "Reported hash_count: {}, last report: {:?} ago",
+                local_hash_count,
+                last_hash_report.elapsed()
+            );
+
+            local_hash_count = 0;
+            last_hash_report = Instant::now();
         }
 
         let cmd = check_command_available(rcv);
         if let Some(cmd_value) = cmd {
             match cmd_value {
                 WorkerCmd::NewJob { job_data } => {
-                    let send_result = metric_tx.send(hash_count);
+                    let send_result = metric_tx.send(local_hash_count);
                     if send_result.is_err() {
                         //flush hash_count
                         error!("metric submit failed {:?}", send_result);
