@@ -13,6 +13,7 @@ use mithril::randomx::memory::VmMemoryAllocator;
 use mithril::stratum::{StratumAction, StratumClient};
 use mithril::timer;
 use mithril::worker::worker_metrics;
+use mithril::worker::worker_metrics::HashCompletionReport;
 use mithril::worker::worker_pool;
 use mithril::worker::worker_pool::WorkerPool;
 use std::io;
@@ -85,7 +86,7 @@ fn main() {
         };
 
         // Start metrics thread.
-        let (metric_sndr, metric_rx) = unbounded::<u64>();
+        let (metric_sndr, metric_rx) = unbounded::<HashCompletionReport>();
         let (agg, total_hashes) = worker_metrics::MetricsAggregator::new();
         let stop_metrics = Arc::new(AtomicBool::new(false));
         let stop_metrics_thread = stop_metrics.clone();

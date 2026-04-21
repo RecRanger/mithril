@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::worker::worker_metrics::HashCompletionReport;
+
 use self::crossbeam_channel::{unbounded, Receiver, Sender};
 use super::super::byte_string;
 use super::super::randomx::memory::{VmMemory, VmMemoryAllocator};
@@ -50,8 +52,7 @@ enum WorkerExit {
 pub fn start(
     num_threads: u64,
     share_sndr: &Sender<stratum::StratumCmd>,
-
-    metric_sndr: &Sender<u64>,
+    metric_sndr: &Sender<HashCompletionReport>,
     vm_memory_allocator: VmMemoryAllocator,
 ) -> WorkerPool {
     let mut thread_chan: Vec<Sender<WorkerCmd>> = Vec::with_capacity(num_threads as usize);
@@ -126,7 +127,7 @@ impl WorkerPool {
 fn work(
     rcv: &Receiver<WorkerCmd>,
     share_tx: &Sender<stratum::StratumCmd>,
-    metric_tx: &Sender<u64>,
+    metric_tx: &Sender<HashCompletionReport>,
     thread_id: u64,
 ) {
     let first_job = rcv.recv();
@@ -173,7 +174,7 @@ fn work_job<'a>(
     job: &'a JobData,
     rcv: &'a Receiver<WorkerCmd>,
     share_tx: &Sender<stratum::StratumCmd>,
-    metric_tx: &Sender<u64>,
+    metric_tx: &Sender<HashCompletionReport>,
     thread_id: u64,
 ) -> WorkerExit {
     let num_target = job_target_value(&job.target);
@@ -204,7 +205,7 @@ fn work_job<'a>(
                 hash: hash_result.to_string(),
             };
 
-            debug!("Share found in thread {thread_id}: nonce={nonce_hex}, hash={hash_result}");
+            info!("Share found in thread {thread_id}: nonce={nonce_hex}, hash={hash_result}");
 
             let submit_result = stratum::submit_share(share_tx, share);
             if submit_result.is_err() {
@@ -214,7 +215,10 @@ fn work_job<'a>(
 
         local_hash_count += 1;
         if local_hash_count > 15 || last_hash_report.elapsed() > hash_report_interval {
-            let send_result = metric_tx.send(local_hash_count);
+            let send_result = metric_tx.send(HashCompletionReport {
+                at: Instant::now(),
+                count: local_hash_count,
+            });
             if send_result.is_err() {
                 error!("metric submit failed {:?}", send_result);
             }
@@ -233,7 +237,10 @@ fn work_job<'a>(
         if let Some(cmd_value) = cmd {
             match cmd_value {
                 WorkerCmd::NewJob { job_data } => {
-                    let send_result = metric_tx.send(local_hash_count);
+                    let send_result = metric_tx.send(HashCompletionReport {
+                        at: Instant::now(),
+                        count: local_hash_count,
+                    });
                     if send_result.is_err() {
                         error!("metric submit failed {:?}", send_result);
                     }

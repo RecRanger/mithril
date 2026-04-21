@@ -5,15 +5,16 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
 
-struct Sample {
-    at: Instant,
-    count: u64,
+pub struct HashCompletionReport {
+    pub at: Instant,
+    pub count: u64,
 }
 
 pub struct MetricsAggregator {
-    samples: VecDeque<Sample>,
+    samples: VecDeque<HashCompletionReport>,
     first_sample_at: Option<Instant>,
-    /// Lifetime hash counter — clone the Arc before spawning the metrics
+
+    /// Lifetime hash counter. Clone the Arc before spawning the metrics
     /// thread so `main` can read it for the bandit reward calculation.
     pub total_hashes: Arc<AtomicU64>,
 
@@ -41,16 +42,17 @@ impl MetricsAggregator {
     /// Drain all pending hash counts from the channel (never blocks),
     /// then return (15 s, 60 s, 15 min) rates in H/s.
     /// `None` means the window hasn't filled yet — callers stay silent.
-    pub fn update(&mut self, rx: &Receiver<u64>) -> (Option<f64>, Option<f64>, Option<f64>) {
-        let now = Instant::now();
-
-        while let Ok(count) = rx.try_recv() {
-            if self.first_sample_at.is_none() {
-                self.first_sample_at = Some(now);
-            }
-            self.total_hashes.fetch_add(count, Ordering::Relaxed);
-            self.samples.push_back(Sample { at: now, count });
+    pub fn push_hash_count(&mut self, hash_report: HashCompletionReport) {
+        if self.first_sample_at.is_none() {
+            self.first_sample_at = Some(hash_report.at);
         }
+        self.total_hashes
+            .fetch_add(hash_report.count, Ordering::Relaxed);
+        self.samples.push_back(hash_report);
+    }
+
+    pub fn get_rates(&mut self) -> (Option<f64>, Option<f64>, Option<f64>) {
+        let now = Instant::now();
 
         // Drop samples older than the largest window.
         let horizon = now - self.window_15m;
@@ -99,34 +101,52 @@ pub fn fmt_rate(rate: Option<f64>) -> String {
 /// Monitor and report hashrate metrics.
 ///
 /// Run this on a dedicated thread.
-pub fn run_metrics_loop(mut agg: MetricsAggregator, rx: &Receiver<u64>, stop: &AtomicBool) {
-    let poll_interval = Duration::from_secs(5);
+pub fn run_metrics_loop(
+    mut agg: MetricsAggregator,
+    rx: &Receiver<HashCompletionReport>,
+    stop: &AtomicBool,
+) {
+    let poll_interval = Duration::from_secs_f64(0.5);
+
+    let report_interval = Duration::from_secs_f64(5.0);
+    let mut last_report_time = Instant::now();
 
     loop {
         std::thread::sleep(poll_interval);
 
         if stop.load(Ordering::Relaxed) {
             // One final drain so total_hashes is accurate for the bandit.
-            agg.update(rx);
+            while let Ok(count) = rx.try_recv() {
+                agg.push_hash_count(count);
+            }
+
             return;
         }
 
-        debug!(
-            "total_hashes: {}, total_samples: {}, total_elapsed: {:?}",
-            agg.total_hashes.load(Ordering::Relaxed),
-            agg.samples.len(),
-            agg.first_sample_at.and_then(|t| Some(t.elapsed()))
-        );
+        while let Ok(count) = rx.try_recv() {
+            agg.push_hash_count(count);
+        }
 
-        let (r15s, r60s, r15m) = agg.update(rx);
-
-        if r15s.is_some() || r60s.is_some() || r15m.is_some() {
-            println!(
-                "Hashrate - 15s: {} | 60s: {} | 15m: {}",
-                fmt_rate(r15s),
-                fmt_rate(r60s),
-                fmt_rate(r15m),
+        if last_report_time.elapsed() >= report_interval {
+            debug!(
+                "total_hashes: {}, total_samples: {}, total_elapsed: {:?}",
+                agg.total_hashes.load(Ordering::Relaxed),
+                agg.samples.len(),
+                agg.first_sample_at.and_then(|t| Some(t.elapsed()))
             );
+
+            let (r15s, r60s, r15m) = agg.get_rates();
+
+            if r15s.is_some() || r60s.is_some() || r15m.is_some() {
+                println!(
+                    "Hashrate - 15s: {} | 60s: {} | 15m: {}",
+                    fmt_rate(r15s),
+                    fmt_rate(r60s),
+                    fmt_rate(r15m),
+                );
+            }
+
+            last_report_time = Instant::now();
         }
     }
 }
