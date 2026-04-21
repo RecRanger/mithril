@@ -9,13 +9,13 @@ extern crate mithril;
 use self::crossbeam_channel::{select, unbounded, Receiver};
 use mithril::bandit_tools;
 use mithril::mithril_config;
-use mithril::randomx::memory::VmMemoryAllocator;
 use mithril::stratum::{StratumAction, StratumClient};
 use mithril::timer;
 use mithril::worker::worker_metrics;
 use mithril::worker::worker_metrics::HashCompletionReport;
 use mithril::worker::worker_pool;
 use mithril::worker::worker_pool::WorkerPool;
+use rustdom_x::VmMemory;
 use std::io;
 use std::io::Error;
 use std::path::Path;
@@ -56,7 +56,7 @@ fn main() {
 
     let timer_rcvr = timer::setup(&config.worker_conf, &config.donation_conf);
     let mut donation_hashing = false;
-    let mut vm_memory_allocator = VmMemoryAllocator::initial();
+    let cache = Arc::new(VmMemory::full(b"RandomX\x03")); // or light for a smaller memory footprint
 
     loop {
         // Stratum start.
@@ -96,13 +96,11 @@ fn main() {
             .expect("metrics thread");
 
         // Start worker pool.
-        let mut pool =
-            worker_pool::start(num_threads, &share_sndr, &metric_sndr, vm_memory_allocator);
+        let mut pool = worker_pool::start(num_threads, &share_sndr, &metric_sndr, cache.clone());
 
         let term_result =
             start_main_event_loop(&mut pool, &client_err_rcvr, &stratum_rcvr, &timer_rcvr);
 
-        vm_memory_allocator = pool.vm_memory_allocator.clone();
         pool.stop();
         client.stop();
 

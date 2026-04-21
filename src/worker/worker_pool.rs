@@ -9,15 +9,15 @@ use crate::worker::worker_metrics::HashCompletionReport;
 
 use self::crossbeam_channel::{unbounded, Receiver, Sender};
 use super::super::byte_string;
-use super::super::randomx::memory::{VmMemory, VmMemoryAllocator};
-use super::super::randomx::vm::new_vm;
 use super::super::stratum;
 use super::super::stratum::stratum_data;
+use rustdom_x::memory::{VmMemory, VmMemoryAllocator};
+use rustdom_x::new_vm;
 
 pub struct WorkerPool {
     thread_chan: Vec<Sender<WorkerCmd>>,
     thread_hnd: Vec<thread::JoinHandle<()>>,
-    pub vm_memory_allocator: VmMemoryAllocator,
+    pub vm_memory_allocator: Arc<VmMemory>,
 }
 
 #[derive(Clone)]
@@ -53,7 +53,7 @@ pub fn start(
     num_threads: u64,
     share_sndr: &Sender<stratum::StratumCmd>,
     metric_sndr: &Sender<HashCompletionReport>,
-    vm_memory_allocator: VmMemoryAllocator,
+    vm_memory_allocator: Arc<VmMemory>,
 ) -> WorkerPool {
     let mut thread_chan: Vec<Sender<WorkerCmd>> = Vec::with_capacity(num_threads as usize);
     let mut thread_hnd: Vec<thread::JoinHandle<()>> = Vec::with_capacity(num_threads as usize);
@@ -86,7 +86,7 @@ impl WorkerPool {
         target: &str,
     ) {
         info!("job change, blob {}", blob);
-        self.vm_memory_allocator.reallocate(seed_hash.to_string());
+        // self.vm_memory_allocator.reallocate(seed_hash.to_string());
         let nonce = Arc::new(AtomicU32::new(0));
 
         for (_, tx) in self.thread_chan.iter().enumerate() {
@@ -94,7 +94,7 @@ impl WorkerPool {
                 job_data: JobData {
                     miner_id: miner_id.to_string(),
                     seed_hash: seed_hash.to_string(),
-                    memory: self.vm_memory_allocator.vm_memory.clone(),
+                    memory: self.vm_memory_allocator.clone(), // .vm_memory.clone(),
                     blob: blob.to_string(),
                     job_id: job_id.to_string(),
                     target: target.to_string(),
